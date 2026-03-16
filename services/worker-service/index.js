@@ -91,15 +91,20 @@ const worker = new Worker(
       `🚀 Processing job ${job.id} for ${job.data.repo}#${job.data.prNumber}`,
     );
 
+    // Start execution timer
+    const startTime = Date.now();
+
     try {
       const diff = await fetchPRDiff(job.data.repo, job.data.prNumber);
-      const truncatedDiff = diff.slice(0, 3500);
+      const truncatedDiff = diff.slice(0, 6000); // Increased context
 
       const prompt = `You are an expert DevOps reviewer. Analyze this GitHub PR diff.
 Return: ### Summary, ### Bugs, ### Security, ### Performance, and ### Risk Score (X/10).
 At the very end of your response, strictly include this tag: [FINAL_SCORE: X]
 Keep bullets concise.
 DIFF: ${truncatedDiff}`;
+
+      console.log(`⏳ Sending ${truncatedDiff.length} chars to NVIDIA AI...`);
 
       const response = await axios.post(
         "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -118,9 +123,13 @@ DIFF: ${truncatedDiff}`;
             Accept: "application/json",
             "Content-Type": "application/json",
           },
-          timeout: 300000,
+          timeout: 300000, // 5 minute request timeout
         },
       );
+
+      // Calculate AI latency
+      const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+      console.log(`⏱️ AI Response received in ${duration}s`);
 
       const message = response.data?.choices?.[0]?.message;
       const aiText = message?.content || message?.reasoning_content;
@@ -171,11 +180,12 @@ DIFF: ${truncatedDiff}`;
       );
 
       console.log(
-        `✅ Job ${job.id} Finished. Risk Score synced at: ${finalRiskScore}`,
+        `✅ Job ${job.id} Finished. Risk Score: ${finalRiskScore}. Total time: ${duration}s`,
       );
     } catch (error) {
+      const errorDuration = ((Date.now() - startTime) / 1000).toFixed(2);
       console.error(
-        `❌ Error in job ${job.id}:`,
+        `❌ Error in job ${job.id} after ${errorDuration}s:`,
         error.response?.data || error.message,
       );
       throw error;
@@ -183,8 +193,8 @@ DIFF: ${truncatedDiff}`;
   },
   {
     connection,
-    concurrency: 1, // Processes one PR at a time to stay within Upstash limits
-    lockDuration: 60000, // Increased to 60s for slow AI responses
+    concurrency: 1, 
+    lockDuration: 120000,
     settings: {
       stalledInterval: 60000,
       maxStalledCount: 2,
