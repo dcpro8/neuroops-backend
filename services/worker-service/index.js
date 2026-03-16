@@ -77,9 +77,16 @@ async function postCommentToPR(repo, prNumber, aiText, riskScore) {
 // =====================================================
 // BULLMQ WORKER
 // =====================================================
+
 const worker = new Worker(
   "pr-review-queue",
   async (job) => {
+    // Standardizing the job name check
+    if (job.name !== "process-pr") {
+      console.log(`ℹ️ Skipping unknown job name: ${job.name}`);
+      return;
+    }
+
     console.log(
       `🚀 Processing job ${job.id} for ${job.data.repo}#${job.data.prNumber}`,
     );
@@ -176,27 +183,40 @@ DIFF: ${truncatedDiff}`;
   },
   {
     connection,
+    concurrency: 1, // Processes one PR at a time to stay within Upstash limits
+    lockDuration: 60000, // Increased to 60s for slow AI responses
     settings: {
-      stalledInterval: 300000,
-      maxStalledCount: 1,
-      backoff: {
-        type: "exponential",
-        delay: 15000, // 15s initial retry delay
-      },
+      stalledInterval: 60000,
+      maxStalledCount: 2,
     },
-    // Wait up to 60s when queue is empty before checking again
-    drainDelay: 60,
   },
 );
 
-worker.on("completed", (job) => console.log(`✨ Job ${job.id} completed`));
-worker.on("failed", (job, err) =>
-  console.error(`🔥 Job ${job?.id} failed:`, err.message),
-);
+// High-visibility event listeners for Render logs
+worker.on("active", (job) => {
+  console.log(`🏃 Worker is now processing: ${job.id}`);
+});
+
+worker.on("completed", (job) => {
+  console.log(`✨ Job ${job.id} completed successfully`);
+});
+
+worker.on("failed", (job, err) => {
+  console.error(`🔥 Job ${job?.id} failed:`, err.message);
+});
+
+worker.on("error", (err) => {
+  console.error("❌ Critical Worker Error:", err);
+});
 
 const PORT = process.env.PORT || 5003;
 
-// Health Check Endpoint
-app.get("/health", (req, res) => res.status(200).json({ status: "ok" }));
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "ok", 
+    worker: "running",
+    redis: connection.status 
+  });
+});
 
 app.listen(PORT, () => console.log(`📡 Worker service live on ${PORT}`));
